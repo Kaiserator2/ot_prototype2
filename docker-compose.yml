@@ -19,6 +19,12 @@ services:
       RABBITMQ_DEFAULT_PASS: password
     networks:
       - ot-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   # Telegraf mit BACnet Shim
   telegraf:
