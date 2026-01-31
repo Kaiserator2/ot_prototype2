@@ -15,8 +15,8 @@ interface SimulatedPoint {
   unit: number;
 }
 
-// Simulate 1000 elevators with realistic sensor data
-const NUM_ELEVATORS = 1000;
+// Simulate 10000 elevators with realistic sensor data
+const NUM_ELEVATORS = 10000;
 const FLOORS = 10;
 
 interface ElevatorState {
@@ -92,6 +92,14 @@ function buildSimulatedPoints(): SimulatedPoint[] {
 
 const simulatedPoints: SimulatedPoint[] = buildSimulatedPoints();
 
+// Build Maps for O(1) lookup instead of O(n) array.find()
+const pointsMap = new Map<string, SimulatedPoint>();
+const pointsByName = new Map<string, SimulatedPoint>();
+for (const point of simulatedPoints) {
+  pointsMap.set(`${point.objectType}:${point.instance}`, point);
+  pointsByName.set(point.name, point);
+}
+
 // Create BACnet server
 const server = new BACnet({ port: BACNET_PORT });
 
@@ -126,14 +134,8 @@ server.on("readProperty", (msg: any) => {
   const instance = msg.payload.objectId.instance;
   const propertyId = msg.payload.property.id;
 
-  console.log(
-    `ReadProperty: objectType=${objectType}, instance=${instance}, property=${propertyId}`
-  );
-
-  // Find the point
-  const point = simulatedPoints.find(
-    (p) => p.objectType === objectType && p.instance === instance
-  );
+  // Find the point using O(1) Map lookup
+  const point = pointsMap.get(`${objectType}:${instance}`);
 
   if (!point) {
     // Check if reading device object
@@ -142,7 +144,6 @@ server.on("readProperty", (msg: any) => {
       return;
     }
 
-    console.log(`Object not found: ${objectType}:${instance}`);
     return;
   }
 
@@ -184,7 +185,6 @@ server.on("readProperty", (msg: any) => {
       break;
 
     default:
-      console.log(`Property ${propertyId} not implemented`);
       return;
   }
 
@@ -300,8 +300,58 @@ function handleDevicePropertyRead(msg: any, propertyId: number) {
 
 // Handle Read-Property-Multiple requests
 server.on("readPropertyMultiple", (msg: any) => {
-  console.log(`ReadPropertyMultiple request received`);
-  // Simplified handling - respond with available data
+  const requestedObjects = msg.payload.properties || [];
+  const responseValues: any[] = [];
+
+  for (const req of requestedObjects) {
+    const objectType = req.objectId.type ?? req.objectId.objectType;
+    const instance = req.objectId.instance;
+    const point = pointsMap.get(`${objectType}:${instance}`);
+
+    const propertyResults: any[] = [];
+
+    for (const prop of req.properties) {
+      const propertyId = prop.id;
+
+      if (!point) {
+        // Object not found - skip
+        continue;
+      }
+
+      let value: any;
+      switch (propertyId) {
+        case bacnetEnum.PropertyIdentifier.PRESENT_VALUE:
+          if (objectType === bacnetEnum.ObjectType.BINARY_INPUT) {
+            value = { type: bacnetEnum.ApplicationTag.ENUMERATED, value: point.value };
+          } else {
+            value = { type: bacnetEnum.ApplicationTag.REAL, value: point.value };
+          }
+          break;
+        default:
+          continue;
+      }
+
+      propertyResults.push({
+        property: { id: propertyId, index: 0xFFFFFFFF },
+        value: [value]
+      });
+    }
+
+    if (propertyResults.length > 0) {
+      responseValues.push({
+        objectId: { type: objectType, instance: instance },
+        values: propertyResults
+      });
+    }
+  }
+
+  if (responseValues.length > 0) {
+    server.readPropertyMultipleResponse(
+      msg.header.sender.address,
+      msg.invokeId,
+      responseValues
+    );
+  }
 });
 
 // Simulate elevator movement
@@ -345,19 +395,18 @@ function updateSimulatedValues() {
       state.loadWeight = Math.random() * 600;
     }
 
-    // Update point values
-    const base = e * 20;
-    simulatedPoints.find(p => p.name === `${prefix}.CurrentFloor`)!.value = state.currentFloor;
-    simulatedPoints.find(p => p.name === `${prefix}.TargetFloor`)!.value = state.targetFloor;
-    simulatedPoints.find(p => p.name === `${prefix}.Direction`)!.value = state.direction;
-    simulatedPoints.find(p => p.name === `${prefix}.Speed`)!.value = state.speed;
-    simulatedPoints.find(p => p.name === `${prefix}.Position`)!.value = state.position;
-    simulatedPoints.find(p => p.name === `${prefix}.LoadWeight`)!.value = state.loadWeight;
-    simulatedPoints.find(p => p.name === `${prefix}.MotorTemperature`)!.value = state.motorTemp;
-    simulatedPoints.find(p => p.name === `${prefix}.DoorOpen`)!.value = state.doorOpen ? 1 : 0;
-    simulatedPoints.find(p => p.name === `${prefix}.TripCount`)!.value = state.tripCount;
-    simulatedPoints.find(p => p.name === `${prefix}.BrakeEngaged`)!.value = state.speed === 0 ? 1 : 0;
-    simulatedPoints.find(p => p.name === `${prefix}.OverloadWarning`)!.value = state.loadWeight > 600 ? 1 : 0;
+    // Update point values using O(1) Map lookup
+    pointsByName.get(`${prefix}.CurrentFloor`)!.value = state.currentFloor;
+    pointsByName.get(`${prefix}.TargetFloor`)!.value = state.targetFloor;
+    pointsByName.get(`${prefix}.Direction`)!.value = state.direction;
+    pointsByName.get(`${prefix}.Speed`)!.value = state.speed;
+    pointsByName.get(`${prefix}.Position`)!.value = state.position;
+    pointsByName.get(`${prefix}.LoadWeight`)!.value = state.loadWeight;
+    pointsByName.get(`${prefix}.MotorTemperature`)!.value = state.motorTemp;
+    pointsByName.get(`${prefix}.DoorOpen`)!.value = state.doorOpen ? 1 : 0;
+    pointsByName.get(`${prefix}.TripCount`)!.value = state.tripCount;
+    pointsByName.get(`${prefix}.BrakeEngaged`)!.value = state.speed === 0 ? 1 : 0;
+    pointsByName.get(`${prefix}.OverloadWarning`)!.value = state.loadWeight > 600 ? 1 : 0;
   }
 
   // Log summary only

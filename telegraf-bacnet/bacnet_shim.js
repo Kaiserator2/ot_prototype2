@@ -115,45 +115,93 @@ async function main() {
   }
 
   const totalObjects = allDevices.reduce((sum, d) => sum + d.objects.length, 0);
-  console.error(`# BACnet Shim: ${allDevices.length} devices, ${totalObjects} objects, interval ${interval/1000}s`);
+  // Limit concurrent requests to avoid BACnet invokeId collisions (8-bit = max 255)
+  const MAX_CONCURRENT = config.maxConcurrent || 200;
+  let activeRequests = 0;
+  const requestQueue = [];
+
+  function processQueue() {
+    while (requestQueue.length > 0 && activeRequests < MAX_CONCURRENT) {
+      const { resolve: res, fn } = requestQueue.shift();
+      activeRequests++;
+      fn().finally(() => {
+        activeRequests--;
+        processQueue();
+      }).then(res.resolve, res.reject);
+    }
+  }
+
+  function limitConcurrency(fn) {
+    return new Promise((resolve, reject) => {
+      requestQueue.push({ resolve: { resolve, reject }, fn });
+      processQueue();
+    });
+  }
+
+  console.error(`# BACnet Shim: ${allDevices.length} devices, ${totalObjects} objects, interval ${interval/1000}s, maxConcurrent ${MAX_CONCURRENT}`);
 
   const client = new BACnet({ port: config.clientPort || 47809 });
 
-  function readProperty(address, objectType, objectInstance) {
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('timeout')), 3000);
-      client.readProperty(
+  // ReadPropertyMultiple - read ALL objects of a device in ONE request
+  function readPropertyMultiple(address, objects) {
+    return limitConcurrency(() => new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('timeout')), 5000);
+
+      // Build request: each object with PRESENT_VALUE property
+      const requestObjects = objects.map(obj => ({
+        objectId: { type: obj.type, instance: obj.instance },
+        properties: [{ id: PROPERTY_PRESENT_VALUE }]
+      }));
+
+      client.readPropertyMultiple(
         address,
-        { type: objectType, instance: objectInstance },
-        PROPERTY_PRESENT_VALUE,
-        (err, value) => {
+        requestObjects,
+        (err, response) => {
           clearTimeout(timeout);
-          if (err) reject(err);
-          else resolve(value?.values?.[0]?.value ?? null);
+          if (err) {
+            reject(err);
+          } else {
+            // Parse response: extract values for each object
+            const values = {};
+            if (response?.values) {
+              for (const item of response.values) {
+                const key = `${item.objectId.type}:${item.objectId.instance}`;
+                const propValue = item.values?.[0]?.value?.[0]?.value;
+                if (propValue !== undefined) {
+                  values[key] = propValue;
+                }
+              }
+            }
+            resolve(values);
+          }
         }
       );
-    });
+    }));
   }
 
   async function pollDevice(device) {
     const ts = Date.now() * 1000000;
-    const results = [];
+    const tags = { asset_id: device.name, ...device.tags };
+    const tagStr = Object.entries(tags).map(([k, v]) => `${k}=${v}`).join(',');
 
-    for (const obj of device.objects) {
-      try {
-        const value = await readProperty(device.address, obj.type, obj.instance);
-        if (value !== null) {
-          const tags = { asset_id: device.name, ...device.tags };
-          const tagStr = Object.entries(tags).map(([k, v]) => `${k}=${v}`).join(',');
+    try {
+      // ONE request for ALL 23 objects instead of 23 separate requests
+      const values = await readPropertyMultiple(device.address, device.objects);
+
+      const results = [];
+      for (const obj of device.objects) {
+        const key = `${obj.type}:${obj.instance}`;
+        const value = values[key];
+        if (value !== undefined) {
           const fieldValue = obj.isBinary ? `${value}i` : value;
           results.push(`bacnet,${tagStr} ${obj.name}=${fieldValue} ${ts}`);
         }
-      } catch (e) {
-        // Timeout ignorieren
       }
+      return results;
+    } catch (e) {
+      // Timeout or error - return empty
+      return [];
     }
-
-    return results;
   }
 
   // Paralleles Polling mit Batching
