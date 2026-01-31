@@ -1,0 +1,7 @@
+{
+  "name": "bacnet-shim",
+  "version": "1.0.0",
+  "dependencies": {
+    "node-bacnet": "^0.2.4"
+  }
+}

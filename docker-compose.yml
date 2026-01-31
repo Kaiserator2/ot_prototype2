@@ -1,0 +1,30 @@
+version: '3.8'
+services:
+  # BACnet Simulator
+  bacnet-simulator:
+    build: ./bacnet-simulator
+    ports:
+      - "47808:47808/udp"
+    environment:
+      BACNET_DEVICE_ID: "1234"
+      BACNET_PORT: "47808"
+
+  # RabbitMQ
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: user
+      RABBITMQ_DEFAULT_PASS: password
+
+  # Telegraf mit BACnet Plugin
+  telegraf:
+    build: ./telegraf-bacnet
+    network_mode: "host"
+    volumes:
+      - ./telegraf.conf:/etc/telegraf/telegraf.conf:ro
+    depends_on:
+      - rabbitmq
+      - bacnet-simulator
