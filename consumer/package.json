@@ -1,0 +1,12 @@
+{
+  "name": "rabbitmq-consumer",
+  "version": "1.0.0",
+  "description": "Consumer for iot_metrics exchange",
+  "main": "consumer.js",
+  "scripts": {
+    "start": "node consumer.js"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.3"
+  }
+}

@@ -41,6 +41,22 @@ services:
     networks:
       - ot-network
 
+  # RabbitMQ Consumer
+  consumer:
+    build: ./consumer
+    environment:
+      RABBITMQ_HOST: "rabbitmq"
+      RABBITMQ_USER: "user"
+      RABBITMQ_PASS: "password"
+      LOG_FILE: "/var/log/consumer/messages.log"
+    volumes:
+      - consumer-logs:/var/log/consumer
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - ot-network
+
   # DevContainer für Codespaces
   devcontainer:
     image: mcr.microsoft.com/devcontainers/base:ubuntu
@@ -53,3 +69,6 @@ services:
 networks:
   ot-network:
     driver: bridge
+
+volumes:
+  consumer-logs:
