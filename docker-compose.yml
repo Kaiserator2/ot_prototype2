@@ -1,13 +1,12 @@
-version: '3.8'
 services:
   # BACnet Simulator
   bacnet-simulator:
     build: ./bacnet-simulator
-    ports:
-      - "47808:47808/udp"
     environment:
       BACNET_DEVICE_ID: "1234"
       BACNET_PORT: "47808"
+    networks:
+      - ot-network
 
   # RabbitMQ
   rabbitmq:
@@ -18,13 +17,33 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: user
       RABBITMQ_DEFAULT_PASS: password
+    networks:
+      - ot-network
 
-  # Telegraf mit BACnet Plugin
+  # Telegraf mit BACnet Shim
   telegraf:
     build: ./telegraf-bacnet
-    network_mode: "host"
     volumes:
       - ./telegraf.conf:/etc/telegraf/telegraf.conf:ro
+    environment:
+      # Service-Namen für Docker-Netzwerk (funktioniert lokal + Codespaces)
+      BACNET_ADDRESS: "bacnet-simulator"
+      RABBITMQ_HOST: "rabbitmq"
     depends_on:
       - rabbitmq
       - bacnet-simulator
+    networks:
+      - ot-network
+
+  # DevContainer für Codespaces
+  devcontainer:
+    image: mcr.microsoft.com/devcontainers/base:ubuntu
+    volumes:
+      - .:/workspace:cached
+    command: sleep infinity
+    networks:
+      - ot-network
+
+networks:
+  ot-network:
+    driver: bridge

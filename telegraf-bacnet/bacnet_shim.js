@@ -61,13 +61,18 @@ function expandDeviceRange(range) {
   const devices = [];
   const { address, baseId, namePrefix, count, instanceOffset, objects, tags } = range;
 
+  // Umgebungsvariable überschreibt Config-Adresse
+  const envAddress = process.env.BACNET_ADDRESS;
+  const finalAddress = envAddress || address.split(':')[0];
+  const port = parseInt(address.split(':')[1] || '47808', 10);
+
   for (let i = 0; i < count; i++) {
     const deviceNum = i + 1;
     const offset = i * instanceOffset;
 
     devices.push({
-      address: { address: address.split(':')[0] },
-      port: parseInt(address.split(':')[1] || '47808', 10),
+      address: { address: finalAddress },
+      port: port,
       id: baseId,
       name: `${namePrefix}_${String(deviceNum).padStart(4, '0')}`,
       tags: { ...tags, device_num: deviceNum },

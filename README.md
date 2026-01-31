@@ -114,19 +114,29 @@ TYPE:INSTANCE:NAME
 
 ## Quick Start
 
-### Voraussetzungen
+### Option 1: GitHub Codespaces (empfohlen)
 
+1. Repository in GitHub öffnen
+2. **Code** → **Codespaces** → **Create codespace on main**
+3. Warten bis der Container gestartet ist
+4. Die Services starten automatisch
+
+**Ports:**
+- RabbitMQ Management: Wird automatisch weitergeleitet (Port 15672)
+- Klick auf "Open in Browser" in der Ports-Ansicht
+
+### Option 2: Lokal
+
+**Voraussetzungen:**
 - Docker
 - Docker Compose
 
-### Starten
-
+**Starten:**
 ```bash
 docker-compose up --build
 ```
 
-### Stoppen
-
+**Stoppen:**
 ```bash
 docker-compose down
 ```
@@ -186,6 +196,8 @@ Erwartete Ausgabe:
 
 ```
 ot_prototype2/
+├── .devcontainer/
+│   └── devcontainer.json       # GitHub Codespaces Konfiguration
 ├── docker-compose.yml          # Container-Orchestrierung
 ├── telegraf.conf               # Telegraf + BACnet-Konfiguration
 ├── README.md
@@ -199,6 +211,50 @@ ot_prototype2/
     ├── package.json
     └── bacnet_shim.js          # BACnet-Client für execd
 ```
+
+## GitHub Codespaces
+
+Das Projekt ist vollständig Codespaces-kompatibel.
+
+### Architektur in Codespaces
+
+Da `network_mode: host` in Codespaces nicht funktioniert, kommunizieren alle Services über ein Docker Bridge-Netzwerk:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Docker Network: ot-network               │
+│                                                             │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐     │
+│  │  bacnet-    │    │  telegraf   │    │  rabbitmq   │     │
+│  │  simulator  │◄──►│  + shim     │───►│             │     │
+│  └─────────────┘    └─────────────┘    └──────┬──────┘     │
+│                                               │             │
+└───────────────────────────────────────────────┼─────────────┘
+                                                │ Port 15672
+                                                ▼
+                                    ┌─────────────────────┐
+                                    │  Codespaces Port    │
+                                    │  Forwarding         │
+                                    └─────────────────────┘
+```
+
+### Konfiguration für Codespaces
+
+Die Adressen werden über Umgebungsvariablen gesetzt:
+
+| Variable | Default | Beschreibung |
+|----------|---------|--------------|
+| `BACNET_ADDRESS` | `bacnet-simulator` | Hostname des BACnet-Geräts |
+| `RABBITMQ_HOST` | `rabbitmq` | Hostname des Message Brokers |
+
+Diese sind in `docker-compose.yml` definiert und werden automatisch an Telegraf übergeben.
+
+### Dateien für Codespaces
+
+| Datei | Zweck |
+|-------|-------|
+| `.devcontainer/devcontainer.json` | Codespaces-Konfiguration, Port-Forwarding |
+| `docker-compose.yml` | Service-Definitionen mit `ot-network` |
 
 ## Erweiterung
 
@@ -258,15 +314,22 @@ curl -u user:password -X POST http://localhost:15672/api/bindings/%2F/e/iot_metr
 ### Keine Daten in Telegraf
 
 1. Prüfen ob Simulator läuft: `docker-compose logs bacnet-simulator`
-2. Prüfen ob Port erreichbar: Container laufen mit `network_mode: host`
+2. Prüfen ob Netzwerk korrekt: `docker network ls` (ot-network muss existieren)
 3. BACnet-Shim Logs: `docker-compose logs telegraf | grep "BACnet Shim"`
 
 ### RabbitMQ Connection Error
 
 1. Warten bis RabbitMQ vollständig gestartet ist (~10s)
 2. Credentials prüfen in `telegraf.conf` und `docker-compose.yml`
+3. In Codespaces: Port 15672 muss weitergeleitet sein
 
 ### Hohe CPU-Last
 
 - `batchSize` in der Config erhöhen (Standard: 50)
 - `interval` erhöhen (Standard: 10s)
+
+### Codespaces-spezifisch
+
+- **Services starten nicht:** Terminal öffnen und `docker-compose up -d` ausführen
+- **Port nicht erreichbar:** In der Ports-Ansicht prüfen ob Port 15672 "Public" ist
+- **Langsame Performance:** Codespaces hat limitierte Ressourcen, ggf. `count` in Config reduzieren
