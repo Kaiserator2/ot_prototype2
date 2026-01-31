@@ -16,6 +16,13 @@ Dieses System simuliert 1000 Aufzüge mit je 23 Sensoren und demonstriert die Er
                                             ┌─────────────────────┐
                                             │     RabbitMQ        │
                                             │  Exchange: iot_metrics
+                                            │  Queue: sensor_data │
+                                            └──────────┬──────────┘
+                                                       │ AMQP
+                                                       ▼
+                                            ┌─────────────────────┐
+                                            │     Consumer        │
+                                            │  (Logging + Stats)  │
                                             └─────────────────────┘
 ```
 
@@ -49,8 +56,30 @@ Custom Telegraf-Image mit Node.js-basiertem BACnet-Client:
 Message Broker für die Weiterleitung der Sensordaten:
 
 - **Exchange:** `iot_metrics` (topic)
+- **Queue:** `sensor_data` (durable, automatisch erstellt)
 - **Routing:** Nach `asset_id` Tag
 - **Format:** JSON
+
+### 4. Consumer (`consumer/`)
+
+Node.js-Anwendung, die Messages aus der Queue konsumiert und loggt:
+
+- **Queue:** `sensor_data` (gebunden an Exchange mit `#` Routing Key)
+- **Logfile:** `/var/log/consumer/messages.log`
+- **Performance-Stats:** Alle 5 Sekunden (konfigurierbar)
+
+**Gemessene Metriken:**
+| Metrik | Beschreibung |
+|--------|--------------|
+| Rate (msg/s) | Durchsatz pro Sekunde |
+| Interval | Messages im letzten Intervall |
+| Total | Gesamtzahl verarbeiteter Messages |
+| Latency | End-to-End-Zeit (avg/min/max in ms) |
+
+**Beispiel-Output:**
+```
+[STATS] 2026-01-31T14:30:05.123Z | Rate: 2300.5 msg/s | Interval: 11502 msgs | Total: 45008 msgs | Latency: avg=12.3ms min=5.1ms max=89.2ms
+```
 
 ## Konfiguration
 
@@ -114,7 +143,7 @@ TYPE:INSTANCE:NAME
 
 ## Quick Start
 
-### Option 1: GitHub Codespaces (empfohlen)
+### Option 1: GitHub Codespaces (non-functional)
 
 1. Repository in GitHub öffnen
 2. **Code** → **Codespaces** → **Create codespace on main**
@@ -182,6 +211,31 @@ Erwartete Ausgabe:
 [Update] 1000 elevators: 950 moving, 20 doors open
 ```
 
+### 5. Consumer-Status und Performance
+
+```bash
+# Consumer Logs mit Performance-Stats
+docker-compose logs -f consumer
+
+# Logfile im Container ansehen
+docker-compose exec consumer tail -f /var/log/consumer/messages.log
+
+# Letzte 100 Zeilen des Logfiles
+docker-compose exec consumer tail -100 /var/log/consumer/messages.log
+```
+
+Erwartete Ausgabe:
+```
+[STATS] 2026-01-31T14:30:05.123Z | Rate: 2300.5 msg/s | Interval: 11502 msgs | Total: 45008 msgs | Latency: avg=12.3ms min=5.1ms max=89.2ms
+```
+
+**Stats-Intervall anpassen:**
+
+In `docker-compose.yml` unter `consumer/environment`:
+```yaml
+STATS_INTERVAL: "10000"  # 10 Sekunden
+```
+
 ## Metriken
 
 | Metrik | Wert |
@@ -206,10 +260,14 @@ ot_prototype2/
 │   ├── package.json
 │   └── src/
 │       └── index.ts            # Aufzug-Simulation
-└── telegraf-bacnet/
-    ├── Dockerfile              # Telegraf + Node.js
+├── telegraf-bacnet/
+│   ├── Dockerfile              # Telegraf + Node.js
+│   ├── package.json
+│   └── bacnet_shim.js          # BACnet-Client für execd
+└── consumer/
+    ├── Dockerfile              # Node.js Consumer
     ├── package.json
-    └── bacnet_shim.js          # BACnet-Client für execd
+    └── consumer.js             # Queue-Consumer mit Logging + Stats
 ```
 
 ## GitHub Codespaces
@@ -221,16 +279,21 @@ Das Projekt ist vollständig Codespaces-kompatibel.
 Da `network_mode: host` in Codespaces nicht funktioniert, kommunizieren alle Services über ein Docker Bridge-Netzwerk:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Docker Network: ot-network               │
-│                                                             │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐     │
-│  │  bacnet-    │    │  telegraf   │    │  rabbitmq   │     │
-│  │  simulator  │◄──►│  + shim     │───►│             │     │
-│  └─────────────┘    └─────────────┘    └──────┬──────┘     │
-│                                               │             │
-└───────────────────────────────────────────────┼─────────────┘
-                                                │ Port 15672
+┌──────────────────────────────────────────────────────────────────┐
+│                    Docker Network: ot-network                    │
+│                                                                  │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐          │
+│  │  bacnet-    │    │  telegraf   │    │  rabbitmq   │          │
+│  │  simulator  │◄──►│  + shim     │───►│             │          │
+│  └─────────────┘    └─────────────┘    └──────┬──────┘          │
+│                                               │                  │
+│                                               ▼                  │
+│                                        ┌─────────────┐          │
+│                                        │  consumer   │          │
+│                                        │  + logging  │          │
+│                                        └─────────────┘          │
+│                                               │ Port 15672      │
+└───────────────────────────────────────────────┼──────────────────┘
                                                 ▼
                                     ┌─────────────────────┐
                                     │  Codespaces Port    │
@@ -238,7 +301,7 @@ Da `network_mode: host` in Codespaces nicht funktioniert, kommunizieren alle Ser
                                     └─────────────────────┘
 ```
 
-### Konfiguration für Codespaces
+### Konfiguration für Codespaces (non-functional)
 
 Die Adressen werden über Umgebungsvariablen gesetzt:
 
@@ -249,7 +312,7 @@ Die Adressen werden über Umgebungsvariablen gesetzt:
 
 Diese sind in `docker-compose.yml` definiert und werden automatisch an Telegraf übergeben.
 
-### Dateien für Codespaces
+### Dateien für Codespaces (non-functional)
 
 | Datei | Zweck |
 |-------|-------|
@@ -298,6 +361,9 @@ In `telegraf.conf` das `devices`-Array erweitern:
 
 ### Queue für Persistenz
 
+Die Queue `sensor_data` wird automatisch vom Consumer erstellt und an die Exchange gebunden.
+
+**Manuelle Queue-Erstellung (optional):**
 ```bash
 # Queue anlegen und an Exchange binden
 curl -u user:password -X PUT http://localhost:15672/api/queues/%2F/sensor_data \
@@ -308,6 +374,21 @@ curl -u user:password -X POST http://localhost:15672/api/bindings/%2F/e/iot_metr
   -H "content-type: application/json" \
   -d '{"routing_key":"#"}'
 ```
+
+### Consumer anpassen
+
+Umgebungsvariablen in `docker-compose.yml`:
+
+| Variable | Default | Beschreibung |
+|----------|---------|--------------|
+| `RABBITMQ_HOST` | `rabbitmq` | RabbitMQ Hostname |
+| `RABBITMQ_USER` | `user` | RabbitMQ Benutzername |
+| `RABBITMQ_PASS` | `password` | RabbitMQ Passwort |
+| `LOG_FILE` | `/var/log/consumer/messages.log` | Pfad zum Logfile |
+| `STATS_INTERVAL` | `5000` | Statistik-Intervall in ms |
+
+## Beobachten
+docker-compose logs --tail=100 consumer
 
 ## Troubleshooting
 
@@ -324,7 +405,7 @@ curl -u user:password -X POST http://localhost:15672/api/bindings/%2F/e/iot_metr
 3. In Codespaces: Port 15672 muss weitergeleitet sein
 
 ### Hohe CPU-Last
-
+Konfiguration für den bacnet shim:
 - `batchSize` in der Config erhöhen (Standard: 50)
 - `interval` erhöhen (Standard: 10s)
 
